@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSQW Video Merger</title>
+    <title>TSvg Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -506,32 +506,6 @@
             try {
                 console.log('[TS-Merger] Starting merge process...');
 
-                // Helper: fetch as blob URL with download progress
-                async function fetchBlobURL(url, mimeType, label) {
-                    const resp = await fetch(url);
-                    if (!resp.ok) throw new Error('Failed to fetch ' + label + ': ' + resp.status);
-                    const contentLength = parseInt(resp.headers.get('Content-Length') || '0', 10);
-                    const reader = resp.body.getReader();
-                    const chunks = [];
-                    let received = 0;
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        chunks.push(value);
-                        received += value.length;
-                        if (contentLength > 0) {
-                            const pct = Math.round((received / contentLength) * 100);
-                            setProgress(3 + Math.round(pct * 0.09), 'Downloading ' + label + '... ' + pct + '% (' + formatBytes(received) + ')');
-                        } else {
-                            setProgress(3, 'Downloading ' + label + '... ' + formatBytes(received));
-                        }
-                    }
-
-                    const blob = new Blob(chunks, { type: mimeType });
-                    return URL.createObjectURL(blob);
-                }
-
                 // Helper: read a File as Uint8Array
                 function readFileAsUint8Array(file) {
                     return new Promise(function (resolve, reject) {
@@ -542,56 +516,35 @@
                     });
                 }
 
-                // Step 1: Load the FFmpeg UMD wrapper (not ESM!) as a script tag.
-                // This avoids the cross-origin Worker issue entirely because the
-                // UMD build registers on globalThis.FFmpegWASM and we control
-                // the worker blob ourselves.
+                // Load FFmpeg 0.11.x UMD — uses importScripts() internally,
+                // which works fine with jsDelivr on GitHub Pages (no CORS worker issues).
                 if (!window._ffmpegLoaded) {
                     setProgress(1, 'Loading FFmpeg library...');
                     await new Promise(function (resolve, reject) {
                         const s = document.createElement('script');
-                        s.src = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js';
+                        s.src = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js';
                         s.onload = resolve;
-                        s.onerror = function () { reject(new Error('Failed to load FFmpeg UMD script')); };
+                        s.onerror = function () { reject(new Error('Failed to load FFmpeg script')); };
                         document.head.appendChild(s);
                     });
-                    console.log('[TS-Merger] FFmpeg UMD script loaded');
+                    console.log('[TS-Merger] FFmpeg 0.11.6 script loaded');
                     window._ffmpegLoaded = true;
                 }
 
-                const { FFmpeg } = FFmpegWASM;
+                const { createFFmpeg } = FFmpeg;
 
-                // Step 2: Download the single-threaded core + WASM as blob URLs
-                const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
-
-                setProgress(3, 'Downloading FFmpeg core...');
-                const coreURL = await fetchBlobURL(baseURL + '/ffmpeg-core.js', 'text/javascript', 'core JS');
-                console.log('[TS-Merger] Core JS ready');
-
-                setProgress(4, 'Downloading FFmpeg WASM (~32 MB)...');
-                const wasmURL = await fetchBlobURL(baseURL + '/ffmpeg-core.wasm', 'application/wasm', 'WASM binary');
-                console.log('[TS-Merger] WASM ready');
-
-                // Step 4: Create FFmpeg instance and load with all blob URLs
-                const ffmpeg = new FFmpeg();
-
-                ffmpeg.on('log', function (ev) {
-                    console.log('[FFmpeg log]', ev.message);
+                const ffmpeg = createFFmpeg({
+                    corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+                    log: true,
+                    progress: function (ev) {
+                        const pct = Math.max(0, Math.min(100, Math.round((ev.ratio || 0) * 100)));
+                        setProgress(15 + Math.round(pct * 0.75), 'Converting... ' + pct + '%');
+                    }
                 });
 
-                ffmpeg.on('progress', function (ev) {
-                    const pct = Math.max(0, Math.min(100, Math.round((ev.progress || 0) * 100)));
-                    setProgress(15 + Math.round(pct * 0.75), 'Converting... ' + pct + '%');
-                });
-
-                setProgress(13, 'Initializing FFmpeg...');
+                setProgress(5, 'Initializing FFmpeg (downloading ~25 MB core)...');
                 console.log('[TS-Merger] Calling ffmpeg.load()...');
-                console.time('[TS-Merger] ffmpeg.load');
-                await ffmpeg.load({
-                    coreURL: coreURL,
-                    wasmURL: wasmURL,
-                });
-                console.timeEnd('[TS-Merger] ffmpeg.load');
+                await ffmpeg.load();
                 console.log('[TS-Merger] ffmpeg.load() completed!');
 
                 setProgress(15, 'Writing files to virtual filesystem...');
@@ -603,16 +556,16 @@
                     tsNames.push(name);
                     setProgress(15 + Math.round((i / files.length) * 25), 'Loading file ' + (i + 1) + ' of ' + files.length + '...');
                     const fileData = await readFileAsUint8Array(files[i].file);
-                    await ffmpeg.writeFile(name, fileData);
+                    ffmpeg.FS('writeFile', name, fileData);
                 }
 
                 // Build concat list
                 const concatContent = tsNames.map(function (n) { return "file '" + n + "'"; }).join('\n');
-                await ffmpeg.writeFile('list.txt', new TextEncoder().encode(concatContent));
+                ffmpeg.FS('writeFile', 'list.txt', new TextEncoder().encode(concatContent));
 
                 setProgress(45, 'Merging and converting to MP4...');
 
-                await ffmpeg.exec([
+                await ffmpeg.run(
                     '-f', 'concat',
                     '-safe', '0',
                     '-i', 'list.txt',
@@ -620,11 +573,11 @@
                     '-bsf:a', 'aac_adtstoasc',
                     '-movflags', '+faststart',
                     'output.mp4'
-                ]);
+                );
 
                 setProgress(90, 'Preparing download...');
 
-                const data = await ffmpeg.readFile('output.mp4');
+                const data = ffmpeg.FS('readFile', 'output.mp4');
                 const blob = new Blob([data.buffer], { type: 'video/mp4' });
                 const url = URL.createObjectURL(blob);
 
@@ -641,10 +594,10 @@
 
                 // Cleanup virtual FS
                 for (const name of tsNames) {
-                    try { await ffmpeg.deleteFile(name); } catch (_) {}
+                    try { ffmpeg.FS('unlink', name); } catch (_) {}
                 }
-                try { await ffmpeg.deleteFile('list.txt'); } catch (_) {}
-                try { await ffmpeg.deleteFile('output.mp4'); } catch (_) {}
+                try { ffmpeg.FS('unlink', 'list.txt'); } catch (_) {}
+                try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
 
             } catch (err) {
                 console.error('Merge failed:', err);
