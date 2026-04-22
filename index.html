@@ -561,15 +561,7 @@
 
                 const { FFmpeg } = FFmpegWASM;
 
-                // Step 2: Fetch the worker.js source and create a same-origin blob
-                setProgress(2, 'Preparing worker...');
-                const workerResp = await fetch('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/814.ffmpeg.js');
-                const workerText = await workerResp.text();
-                const workerBlob = new Blob([workerText], { type: 'text/javascript' });
-                const workerBlobURL = URL.createObjectURL(workerBlob);
-                console.log('[TS-Merger] Worker blob URL created');
-
-                // Step 3: Download the single-threaded core + WASM as blob URLs
+                // Step 2: Download the single-threaded core + WASM as blob URLs
                 const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
 
                 setProgress(3, 'Downloading FFmpeg core...');
@@ -598,7 +590,6 @@
                 await ffmpeg.load({
                     coreURL: coreURL,
                     wasmURL: wasmURL,
-                    classWorkerURL: workerBlobURL,
                 });
                 console.timeEnd('[TS-Merger] ffmpeg.load');
                 console.log('[TS-Merger] ffmpeg.load() completed!');
