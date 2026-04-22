@@ -504,8 +504,17 @@
             setProgress(0, 'Loading FFmpeg...');
 
             try {
-                const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/+esm');
-                const { fetchFile, toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');
+                const { toBlobURL, fetchFile: fetchFileUtil } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');
+
+                setProgress(3, 'Downloading FFmpeg library...');
+
+                // Convert the FFmpeg ESM module itself to a blob URL so the
+                // Worker it spawns internally is same-origin.
+                const ffmpegBlobURL = await toBlobURL(
+                    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js',
+                    'text/javascript'
+                );
+                const { FFmpeg } = await import(/* webpackIgnore: true */ ffmpegBlobURL);
 
                 const ffmpeg = new FFmpeg();
 
@@ -513,6 +522,9 @@
                     const pct = Math.max(0, Math.min(100, Math.round((ev.progress || 0) * 100)));
                     setProgress(pct, 'Converting... ' + pct + '%');
                 });
+
+                // Alias so the rest of the code stays the same
+                const fetchFile = fetchFileUtil;
 
                 setProgress(5, 'Loading FFmpeg core (this may take a moment)...');
 
