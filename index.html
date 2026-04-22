@@ -1,9 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    if (typeof SharedArrayBuffer === "undefined") {
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("./coi-serviceworker.js").then(function(reg) {
+                if (reg.active) {
+                    location.reload();
+                }
+            });
+        }
+    }
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSvg Video Merger</title>
+    <title>TS Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
