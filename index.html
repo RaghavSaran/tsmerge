@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSXX Video Merger</title>
+    <title>TS Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -556,20 +556,10 @@
                         document.head.appendChild(s);
                     });
                     console.log('[TS-Merger] FFmpeg UMD script loaded');
-
-                    await new Promise(function (resolve, reject) {
-                        const s = document.createElement('script');
-                        s.src = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/umd/util.js';
-                        s.onload = resolve;
-                        s.onerror = function () { reject(new Error('Failed to load FFmpeg util script')); };
-                        document.head.appendChild(s);
-                    });
-                    console.log('[TS-Merger] FFmpeg util loaded');
                     window._ffmpegLoaded = true;
                 }
 
                 const { FFmpeg } = FFmpegWASM;
-                const { fetchFile } = FFmpegUtil;
 
                 // Step 2: Fetch the worker.js source and create a same-origin blob
                 setProgress(2, 'Preparing worker...');
