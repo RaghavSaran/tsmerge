@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSA Video Merger</title>
+    <title>TS Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -506,23 +506,6 @@
             try {
                 console.log('[TS-Merger] Starting merge process...');
 
-                const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/+esm');
-                console.log('[TS-Merger] FFmpeg module imported');
-
-                const { fetchFile, toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');
-                console.log('[TS-Merger] ffmpeg/util imported');
-
-                const ffmpeg = new FFmpeg();
-
-                ffmpeg.on('log', function (ev) {
-                    console.log('[FFmpeg log]', ev.message);
-                });
-
-                ffmpeg.on('progress', function (ev) {
-                    const pct = Math.max(0, Math.min(100, Math.round((ev.progress || 0) * 100)));
-                    setProgress(15 + Math.round(pct * 0.75), 'Converting... ' + pct + '%');
-                });
-
                 // Helper: fetch as blob URL with download progress
                 async function fetchBlobURL(url, mimeType, label) {
                     const resp = await fetch(url);
@@ -549,9 +532,54 @@
                     return URL.createObjectURL(blob);
                 }
 
-                // Use the single-threaded core — it does NOT require
-                // SharedArrayBuffer / cross-origin isolation headers,
-                // so it works on GitHub Pages without any header hacks.
+                // Helper: read a File as Uint8Array
+                function readFileAsUint8Array(file) {
+                    return new Promise(function (resolve, reject) {
+                        const reader = new FileReader();
+                        reader.onload = function () { resolve(new Uint8Array(reader.result)); };
+                        reader.onerror = reject;
+                        reader.readAsArrayBuffer(file);
+                    });
+                }
+
+                // Step 1: Load the FFmpeg UMD wrapper (not ESM!) as a script tag.
+                // This avoids the cross-origin Worker issue entirely because the
+                // UMD build registers on globalThis.FFmpegWASM and we control
+                // the worker blob ourselves.
+                if (!window._ffmpegLoaded) {
+                    setProgress(1, 'Loading FFmpeg library...');
+                    await new Promise(function (resolve, reject) {
+                        const s = document.createElement('script');
+                        s.src = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js';
+                        s.onload = resolve;
+                        s.onerror = function () { reject(new Error('Failed to load FFmpeg UMD script')); };
+                        document.head.appendChild(s);
+                    });
+                    console.log('[TS-Merger] FFmpeg UMD script loaded');
+
+                    await new Promise(function (resolve, reject) {
+                        const s = document.createElement('script');
+                        s.src = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/umd/util.js';
+                        s.onload = resolve;
+                        s.onerror = function () { reject(new Error('Failed to load FFmpeg util script')); };
+                        document.head.appendChild(s);
+                    });
+                    console.log('[TS-Merger] FFmpeg util loaded');
+                    window._ffmpegLoaded = true;
+                }
+
+                const { FFmpeg } = FFmpegWASM;
+                const { fetchFile } = FFmpegUtil;
+
+                // Step 2: Fetch the worker.js source and create a same-origin blob
+                setProgress(2, 'Preparing worker...');
+                const workerResp = await fetch('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/814.ffmpeg.js');
+                const workerText = await workerResp.text();
+                const workerBlob = new Blob([workerText], { type: 'text/javascript' });
+                const workerBlobURL = URL.createObjectURL(workerBlob);
+                console.log('[TS-Merger] Worker blob URL created');
+
+                // Step 3: Download the single-threaded core + WASM as blob URLs
                 const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
 
                 setProgress(3, 'Downloading FFmpeg core...');
@@ -562,10 +590,26 @@
                 const wasmURL = await fetchBlobURL(baseURL + '/ffmpeg-core.wasm', 'application/wasm', 'WASM binary');
                 console.log('[TS-Merger] WASM ready');
 
-                setProgress(13, 'Initializing FFmpeg (single-threaded)...');
+                // Step 4: Create FFmpeg instance and load with all blob URLs
+                const ffmpeg = new FFmpeg();
+
+                ffmpeg.on('log', function (ev) {
+                    console.log('[FFmpeg log]', ev.message);
+                });
+
+                ffmpeg.on('progress', function (ev) {
+                    const pct = Math.max(0, Math.min(100, Math.round((ev.progress || 0) * 100)));
+                    setProgress(15 + Math.round(pct * 0.75), 'Converting... ' + pct + '%');
+                });
+
+                setProgress(13, 'Initializing FFmpeg...');
                 console.log('[TS-Merger] Calling ffmpeg.load()...');
                 console.time('[TS-Merger] ffmpeg.load');
-                await ffmpeg.load({ coreURL, wasmURL });
+                await ffmpeg.load({
+                    coreURL: coreURL,
+                    wasmURL: wasmURL,
+                    classWorkerURL: workerBlobURL,
+                });
                 console.timeEnd('[TS-Merger] ffmpeg.load');
                 console.log('[TS-Merger] ffmpeg.load() completed!');
 
@@ -577,7 +621,8 @@
                     const name = 'input' + i + '.ts';
                     tsNames.push(name);
                     setProgress(15 + Math.round((i / files.length) * 25), 'Loading file ' + (i + 1) + ' of ' + files.length + '...');
-                    await ffmpeg.writeFile(name, await fetchFile(files[i].file));
+                    const fileData = await readFileAsUint8Array(files[i].file);
+                    await ffmpeg.writeFile(name, fileData);
                 }
 
                 // Build concat list
