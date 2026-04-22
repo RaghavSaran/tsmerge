@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSZ Video Merger</title>
+    <title>TSA Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -512,37 +512,7 @@
                 const { fetchFile, toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');
                 console.log('[TS-Merger] ffmpeg/util imported');
 
-                setProgress(3, 'Preparing worker...');
-
-                // Pre-fetch the worker script as a same-origin blob URL
-                const workerBlobURL = await toBlobURL(
-                    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/worker.js',
-                    'text/javascript'
-                );
-                console.log('[TS-Merger] Worker blob URL created:', workerBlobURL);
-
-                // Monkey-patch Worker so that when FFmpeg internally tries to
-                // construct a cross-origin worker, we swap in our blob URL.
-                const OriginalWorker = globalThis.Worker;
-                globalThis.Worker = class PatchedWorker extends OriginalWorker {
-                    constructor(url, opts) {
-                        const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : '';
-                        console.log('[TS-Merger] Worker constructor called with:', urlStr.substring(0, 120));
-                        if (urlStr.includes('ffmpeg') && urlStr.includes('worker')) {
-                            console.log('[TS-Merger] → Redirecting to blob worker');
-                            super(workerBlobURL, opts);
-                        } else if (urlStr.startsWith('blob:')) {
-                            console.log('[TS-Merger] → Already a blob URL, passing through');
-                            super(url, opts);
-                        } else {
-                            console.log('[TS-Merger] → Passing through as-is');
-                            super(url, opts);
-                        }
-                    }
-                };
-
                 const ffmpeg = new FFmpeg();
-                console.log('[TS-Merger] FFmpeg instance created');
 
                 ffmpeg.on('log', function (ev) {
                     console.log('[FFmpeg log]', ev.message);
@@ -550,11 +520,11 @@
 
                 ffmpeg.on('progress', function (ev) {
                     const pct = Math.max(0, Math.min(100, Math.round((ev.progress || 0) * 100)));
-                    setProgress(pct, 'Converting... ' + pct + '%');
+                    setProgress(15 + Math.round(pct * 0.75), 'Converting... ' + pct + '%');
                 });
 
-                // Helper: fetch a URL as a blob URL with download progress
-                async function fetchWithProgress(url, mimeType, label) {
+                // Helper: fetch as blob URL with download progress
+                async function fetchBlobURL(url, mimeType, label) {
                     const resp = await fetch(url);
                     if (!resp.ok) throw new Error('Failed to fetch ' + label + ': ' + resp.status);
                     const contentLength = parseInt(resp.headers.get('Content-Length') || '0', 10);
@@ -569,9 +539,9 @@
                         received += value.length;
                         if (contentLength > 0) {
                             const pct = Math.round((received / contentLength) * 100);
-                            setProgress(5 + Math.round(pct * 0.08), 'Downloading ' + label + '... ' + pct + '% (' + formatBytes(received) + ')');
+                            setProgress(3 + Math.round(pct * 0.09), 'Downloading ' + label + '... ' + pct + '% (' + formatBytes(received) + ')');
                         } else {
-                            setProgress(5, 'Downloading ' + label + '... ' + formatBytes(received));
+                            setProgress(3, 'Downloading ' + label + '... ' + formatBytes(received));
                         }
                     }
 
@@ -579,24 +549,25 @@
                     return URL.createObjectURL(blob);
                 }
 
-                setProgress(5, 'Downloading FFmpeg core JS...');
-                const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
-                const coreURL = await toBlobURL(baseURL + '/ffmpeg-core.js', 'text/javascript');
-                console.log('[TS-Merger] Core JS blob URL ready:', coreURL);
+                // Use the single-threaded core — it does NOT require
+                // SharedArrayBuffer / cross-origin isolation headers,
+                // so it works on GitHub Pages without any header hacks.
+                const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
 
-                setProgress(6, 'Downloading FFmpeg WASM (~32 MB)...');
-                const wasmURL = await fetchWithProgress(baseURL + '/ffmpeg-core.wasm', 'application/wasm', 'WASM core');
-                console.log('[TS-Merger] WASM blob URL ready:', wasmURL);
+                setProgress(3, 'Downloading FFmpeg core...');
+                const coreURL = await fetchBlobURL(baseURL + '/ffmpeg-core.js', 'text/javascript', 'core JS');
+                console.log('[TS-Merger] Core JS ready');
 
-                setProgress(13, 'Initializing FFmpeg...');
+                setProgress(4, 'Downloading FFmpeg WASM (~32 MB)...');
+                const wasmURL = await fetchBlobURL(baseURL + '/ffmpeg-core.wasm', 'application/wasm', 'WASM binary');
+                console.log('[TS-Merger] WASM ready');
+
+                setProgress(13, 'Initializing FFmpeg (single-threaded)...');
                 console.log('[TS-Merger] Calling ffmpeg.load()...');
                 console.time('[TS-Merger] ffmpeg.load');
                 await ffmpeg.load({ coreURL, wasmURL });
                 console.timeEnd('[TS-Merger] ffmpeg.load');
                 console.log('[TS-Merger] ffmpeg.load() completed!');
-
-                // Restore original Worker constructor
-                globalThis.Worker = OriginalWorker;
 
                 setProgress(15, 'Writing files to virtual filesystem...');
 
