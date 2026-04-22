@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSS Video Merger</title>
+    <title>TSK Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -504,17 +504,30 @@
             setProgress(0, 'Loading FFmpeg...');
 
             try {
-                const { toBlobURL, fetchFile: fetchFileUtil } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');
+                const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/+esm');
+                const { fetchFile, toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');
 
-                setProgress(3, 'Downloading FFmpeg library...');
+                setProgress(3, 'Preparing worker...');
 
-                // Convert the FFmpeg ESM module itself to a blob URL so the
-                // Worker it spawns internally is same-origin.
-                const ffmpegBlobURL = await toBlobURL(
-                    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js',
+                // Pre-fetch the worker script as a same-origin blob URL
+                const workerBlobURL = await toBlobURL(
+                    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/worker.js',
                     'text/javascript'
                 );
-                const { FFmpeg } = await import(/* webpackIgnore: true */ ffmpegBlobURL);
+
+                // Monkey-patch Worker so that when FFmpeg internally tries to
+                // construct a cross-origin worker, we swap in our blob URL.
+                const OriginalWorker = globalThis.Worker;
+                globalThis.Worker = class PatchedWorker extends OriginalWorker {
+                    constructor(url, opts) {
+                        const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : '';
+                        if (urlStr.includes('ffmpeg') && urlStr.includes('worker')) {
+                            super(workerBlobURL, opts);
+                        } else {
+                            super(url, opts);
+                        }
+                    }
+                };
 
                 const ffmpeg = new FFmpeg();
 
@@ -523,17 +536,16 @@
                     setProgress(pct, 'Converting... ' + pct + '%');
                 });
 
-                // Alias so the rest of the code stays the same
-                const fetchFile = fetchFileUtil;
-
                 setProgress(5, 'Loading FFmpeg core (this may take a moment)...');
 
                 const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
                 await ffmpeg.load({
                     coreURL: await toBlobURL(baseURL + '/ffmpeg-core.js', 'text/javascript'),
                     wasmURL: await toBlobURL(baseURL + '/ffmpeg-core.wasm', 'application/wasm'),
-                    workerURL: await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/worker.js', 'text/javascript'),
                 });
+
+                // Restore original Worker constructor
+                globalThis.Worker = OriginalWorker;
 
                 setProgress(15, 'Writing files to virtual filesystem...');
 
