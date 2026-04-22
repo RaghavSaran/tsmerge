@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSK Video Merger</title>
+    <title>TSM Video Merger</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -536,13 +536,41 @@
                     setProgress(pct, 'Converting... ' + pct + '%');
                 });
 
-                setProgress(5, 'Loading FFmpeg core (this may take a moment)...');
+                // Helper: fetch a URL as a blob URL with download progress
+                async function fetchWithProgress(url, mimeType, label) {
+                    const resp = await fetch(url);
+                    if (!resp.ok) throw new Error('Failed to fetch ' + label + ': ' + resp.status);
+                    const contentLength = parseInt(resp.headers.get('Content-Length') || '0', 10);
+                    const reader = resp.body.getReader();
+                    const chunks = [];
+                    let received = 0;
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        received += value.length;
+                        if (contentLength > 0) {
+                            const pct = Math.round((received / contentLength) * 100);
+                            setProgress(5 + Math.round(pct * 0.08), 'Downloading ' + label + '... ' + pct + '% (' + formatBytes(received) + ')');
+                        } else {
+                            setProgress(5, 'Downloading ' + label + '... ' + formatBytes(received));
+                        }
+                    }
+
+                    const blob = new Blob(chunks, { type: mimeType });
+                    return URL.createObjectURL(blob);
+                }
+
+                setProgress(5, 'Downloading FFmpeg core...');
 
                 const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
-                await ffmpeg.load({
-                    coreURL: await toBlobURL(baseURL + '/ffmpeg-core.js', 'text/javascript'),
-                    wasmURL: await toBlobURL(baseURL + '/ffmpeg-core.wasm', 'application/wasm'),
-                });
+                const coreURL = await toBlobURL(baseURL + '/ffmpeg-core.js', 'text/javascript');
+                setProgress(6, 'Downloading FFmpeg WASM (~32 MB)...');
+                const wasmURL = await fetchWithProgress(baseURL + '/ffmpeg-core.wasm', 'application/wasm', 'WASM core');
+
+                setProgress(13, 'Initializing FFmpeg...');
+                await ffmpeg.load({ coreURL, wasmURL });
 
                 // Restore original Worker constructor
                 globalThis.Worker = OriginalWorker;
